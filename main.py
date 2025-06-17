@@ -1,49 +1,108 @@
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+import os
 import logging
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ConversationHandler
+from dotenv import load_dotenv
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import json
+from datetime import datetime
 
-# Configurar el logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Configura logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# Credenciales de Google Sheets
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-SERVICE_ACCOUNT_FILE = 'credentials.json'
-credentials = None
-spreadsheet_id = '/d/1aYh4jLV46g0y2LWxG-clVO70ECV3G3f9V77JB5IyAiI/edit'
-range_name = 'Sheet1!A:B'
+# Estados
+NOMBRE, CEDULA, DIRECCION, PLANILLA, NEGOCIO, ACTIVIDAD, CONFIRMAR = range(7)
 
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text('Bienvenido! Por favor, envíame tu número de cédula.')
+# Configura Google Sheets
+def setup_sheets():
+    try:
+        creds_json = json.loads(os.getenv("GOOGLE_CREDS"))
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, scope)
+        client = gspread.authorize(creds)
+        return client.open("Registros_Censo").sheet1
+    except Exception as e:
+        logger.error(f"Error al configurar Sheets: {e}")
+        return None
 
-def save_cedula(update: Update, context: CallbackContext):
-    cedula = update.message.text
-    update.message.reply_text(f'Tu número de cédula es: {cedula}. ¿Es correcto? (Si/No)')
-    context.user_data['cedula'] = cedula
+sheet = setup_sheets()
 
-def confirm(update: Update, context: CallbackContext):
-    if update.message.text.lower() == 'si':
-        creds = None
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-        service = build('sheets', 'v4', credentials=creds)
-        values = [[context.user_data['cedula']]]
-        body = {'values': values}
-        result = service.spreadsheets().values().append(spreadsheetId=spreadsheet_id, range=range_name, valueInputOption='USER_ENTERED', body=body).execute()
-        update.message.reply_text('Número de cédula guardado correctamente.')
+# Handlers del bot (igual que en tu código original)
+def start(update: Update, context):
+    update.message.reply_text(
+        "📋 Bienvenido al Censo Bot\n"
+        "Usa /registro para comenzar."
+    )
+
+def registro(update: Update, context):
+    context.user_data.clear()
+    update.message.reply_text("🔹 Nombre completo:")
+    return NOMBRE
+
+# ... (Añade aquí las demás funciones como nombre(), cedula(), etc.)
+
+def confirmar(update: Update, context):
+    if update.message.text.lower() in ['sí', 'si', 's']:
+        try:
+            row = [
+                context.user_data['nombre'],
+                context.user_data['cedula'],
+                context.user_data['direccion'],
+                context.user_data.get('codigo_planilla', 'N/A'),
+                context.user_data['negocio'],
+                context.user_data['actividad'],
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ]
+            sheet.append_row(row)
+            update.message.reply_text("✅ Registro completado!")
+        except Exception as e:
+            logger.error(f"Error al guardar: {e}")
+            update.message.reply_text("❌ Error al guardar. Intenta más tarde.")
     else:
-        update.message.reply_text('Por favor, envíame tu número de cédula nuevamente.')
+        update.message.reply_text("❌ Registro cancelado.")
+    return ConversationHandler.END
 
 def main():
-    global credentials
-    credentials = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-    updater = Updater("YOUR_BOT_TOKEN", use_context=True)
+    load_dotenv()
+    TOKEN = os.getenv("TELEGRAM_TOKEN")
+    
+    if not TOKEN:
+        logger.error("Falta TELEGRAM_TOKEN")
+        return
+
+    updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, save_cedula))
-    dp.add_handler(MessageHandler(Filters.regex('^(Si|No)$'), confirm))
-    updater.start_polling()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('registro', registro)],
+        states={
+            NOMBRE: [MessageHandler(Filters.text & ~Filters.command, nombre)],
+            CEDULA: [MessageHandler(Filters.text & ~Filters.command, cedula)],
+            # ... (añade todos los estados)
+        },
+        fallbacks=[CommandHandler('cancel', lambda u,c: ConversationHandler.END)]
+    )
+
+    dp.add_handler(conv_handler)
+    dp.add_handler(CommandHandler('start', start))
+
+    # Modo Railway o local
+    if "RAILWAY_ENVIRONMENT" in os.environ:
+        PORT = os.getenv("PORT", "8443")
+        updater.start_webhook(
+            listen="0.0.0.0",
+            port=int(PORT),
+            url_path=TOKEN,
+            webhook_url=f"https://{os.getenv('RAILWAY_PROJECT_NAME')}.railway.app/{TOKEN}"
+        )
+    else:
+        updater.start_polling()
+
     updater.idle()
 
 if __name__ == '__main__':
