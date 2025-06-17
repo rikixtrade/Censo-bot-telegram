@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SERVICE_ACCOUNT_FILE = 'credentials.json'
 credentials = None
-spreadsheet_id = 'YOUR_SPREADSHEET_ID'
+spreadsheet_id = '/d/1aYh4jLV46g0y2LWxG-clVO70ECV3G3f9V77JB5IyAiI/edit'
 range_name = 'Sheet1!A:B'
 
 def start(update: Update, context: CallbackContext):
